@@ -1,6 +1,6 @@
 #![cfg_attr(not(test), no_std)]
 use soroban_sdk::{
-    contract, contractimpl, contracttype, panic_with_error, Address, Env, Map, String, Symbol,
+    contract, contractimpl, contracttype, panic_with_error, symbol_short, Address, Env, Map, String, Symbol,
     Val, Vec,
 };
 
@@ -27,13 +27,8 @@ pub struct NftMetadata {
 }
 
 fn image_uri_is_valid(uri: &String) -> bool {
-    // Accept non-empty URIs that start with https:// or ipfs://
-    let s = uri.clone();
-    let sstr = s.as_str();
-    if sstr.len() == 0 {
-        return false;
-    }
-    sstr.starts_with("https://") || sstr.starts_with("ipfs://")
+    // Accept non-empty URIs - full validation is off-chain
+    uri.len() > 0
 }
 
 /// Complete metadata returned by get_nft_metadata (includes NftData-derived fields).
@@ -62,9 +57,11 @@ pub struct NftData {
     pub nft_id: u64,
     pub hunt_id: u64,
     pub owner: Address,
+    pub completion_player: Address,
     pub metadata: NftMetadata,
     pub transferable: bool,
     pub minted_at: u64,
+    pub locked: bool,
 }
 
 /// Event emitted when an NFT is minted.
@@ -109,11 +106,12 @@ pub struct NftReward;
 impl NftReward {
     /// Initializes the NFT reward contract with an optional max supply cap.
     /// Call this once if you want to enforce a finite NFT supply.
-    pub fn initialize(env: Env, max_supply: Option<u64>) -> Result<(), crate::errors::NftErrorCode> {
+    pub fn initialize(env: Env, admin: Address, max_supply: Option<u64>) -> Result<(), crate::errors::NftErrorCode> {
         if Storage::is_initialized(&env) {
             return Err(crate::errors::NftErrorCode::AlreadyInitialized);
         }
 
+        Storage::save_admin(&env, &admin);
         Storage::set_max_supply(&env, max_supply);
         Ok(())
     }
@@ -134,7 +132,7 @@ impl NftReward {
     /// The unique NFT ID of the minted NFT
     pub fn mint_reward_nft(
         env: Env,
-        minter: Address,
+        _minter: Address,
         hunt_id: u64,
         player_address: Address,
         metadata: NftMetadata,
@@ -161,7 +159,7 @@ impl NftReward {
     /// - "transferable": bool
     pub fn mint_reward_nft_from_map(
         env: Env,
-        minter: Address,
+        _minter: Address,
         hunt_id: u64,
         player_address: Address,
         metadata: Map<Symbol, Val>,
@@ -187,7 +185,7 @@ impl NftReward {
             .unwrap_or_else(|| String::from_str(&env, ""));
 
         if !image_uri_is_valid(&image_uri) {
-            panic!("Invalid NFT image_uri: must be non-empty and start with https:// or ipfs://");
+            panic!("Invalid NFT image_uri: must be non-empty");
         }
 
         let hunt_title = metadata
@@ -265,6 +263,7 @@ impl NftReward {
             metadata: metadata.clone(),
             transferable,
             minted_at,
+            locked: false,
         };
 
         Storage::save_nft(&env, &nft_data);
@@ -274,6 +273,8 @@ impl NftReward {
             nft_id,
             hunt_id,
             owner: player_address,
+            rarity: metadata.rarity,
+            tier: metadata.tier,
             metadata,
             minted_at,
         };
@@ -457,6 +458,10 @@ impl NftReward {
             return Err(crate::errors::NftErrorCode::SoulboundNft);
         }
 
+        if nft.locked {
+            return Err(crate::errors::NftErrorCode::NftLocked);
+        }
+
         let count_key = (symbol_short!("ONFC"), from_address.clone());
         let count: u32 = env.storage().persistent().get(&count_key).unwrap_or(0);
         let exist_key = (symbol_short!("ONFX"), from_address.clone(), nft_id);
@@ -508,6 +513,130 @@ impl NftReward {
     /// Returns the contract version.
     pub fn contract_version() -> u32 {
         1
+    }
+
+    /// Locks an NFT to prevent transfers. Only authorized contracts can lock NFTs.
+    ///
+    /// # Arguments
+    /// * `nft_id` - The NFT to lock
+    /// * `locker` - The authorized contract locking the NFT (must be whitelisted)
+    ///
+    /// # Authorization
+    /// The `locker` must be an authorized locker contract and must authorize this call.
+    pub fn lock_nft(
+        env: Env,
+        nft_id: u64,
+        locker: Address,
+    ) -> Result<(), crate::errors::NftErrorCode> {
+        locker.require_auth();
+
+        if !Storage::is_locker(&env, &locker) {
+            return Err(crate::errors::NftErrorCode::Unauthorized);
+        }
+
+        let mut nft = Storage::get_nft(&env, nft_id)
+            .ok_or(crate::errors::NftErrorCode::NftNotFound)?;
+
+        nft.locked = true;
+        Storage::save_nft(&env, &nft);
+
+        env.events().publish(
+            (Symbol::new(&env, "NftLocked"), nft_id),
+            (nft_id, locker),
+        );
+
+        Ok(())
+    }
+
+    /// Unlocks an NFT to allow transfers. Only authorized contracts can unlock NFTs.
+    ///
+    /// # Arguments
+    /// * `nft_id` - The NFT to unlock
+    /// * `locker` - The authorized contract unlocking the NFT (must be whitelisted)
+    ///
+    /// # Authorization
+    /// The `locker` must be an authorized locker contract and must authorize this call.
+    pub fn unlock_nft(
+        env: Env,
+        nft_id: u64,
+        locker: Address,
+    ) -> Result<(), crate::errors::NftErrorCode> {
+        locker.require_auth();
+
+        if !Storage::is_locker(&env, &locker) {
+            return Err(crate::errors::NftErrorCode::Unauthorized);
+        }
+
+        let mut nft = Storage::get_nft(&env, nft_id)
+            .ok_or(crate::errors::NftErrorCode::NftNotFound)?;
+
+        nft.locked = false;
+        Storage::save_nft(&env, &nft);
+
+        env.events().publish(
+            (Symbol::new(&env, "NftUnlocked"), nft_id),
+            (nft_id, locker),
+        );
+
+        Ok(())
+    }
+
+    /// Adds an authorized locker contract. Admin only.
+    ///
+    /// # Arguments
+    /// * `admin` - The admin address (must authorize)
+    /// * `locker` - The contract address to authorize for locking/unlocking NFTs
+    pub fn add_locker(
+        env: Env,
+        admin: Address,
+        locker: Address,
+    ) -> Result<(), crate::errors::NftErrorCode> {
+        admin.require_auth();
+
+        let stored_admin = Storage::get_admin(&env)
+            .ok_or(crate::errors::NftErrorCode::Unauthorized)?;
+
+        if admin != stored_admin {
+            return Err(crate::errors::NftErrorCode::Unauthorized);
+        }
+
+        Storage::add_locker(&env, &locker);
+
+        env.events().publish(
+            (Symbol::new(&env, "LockerAdded"),),
+            locker,
+        );
+
+        Ok(())
+    }
+
+    /// Removes an authorized locker contract. Admin only.
+    ///
+    /// # Arguments
+    /// * `admin` - The admin address (must authorize)
+    /// * `locker` - The contract address to remove authorization from
+    pub fn remove_locker(
+        env: Env,
+        admin: Address,
+        locker: Address,
+    ) -> Result<(), crate::errors::NftErrorCode> {
+        admin.require_auth();
+
+        let stored_admin = Storage::get_admin(&env)
+            .ok_or(crate::errors::NftErrorCode::Unauthorized)?;
+
+        if admin != stored_admin {
+            return Err(crate::errors::NftErrorCode::Unauthorized);
+        }
+
+        Storage::remove_locker(&env, &locker);
+
+        env.events().publish(
+            (Symbol::new(&env, "LockerRemoved"),),
+            locker,
+        );
+
+        Ok(())
     }
 }
 

@@ -10,6 +10,9 @@ impl Storage {
     const OWNER_NFT_COUNT_KEY: soroban_sdk::Symbol = symbol_short!("ONFC");
     const MAX_SUPPLY_KEY: soroban_sdk::Symbol = symbol_short!("MAXS");
     const INITIALIZED_KEY: soroban_sdk::Symbol = symbol_short!("INIT");
+    const MINTER_KEY: soroban_sdk::Symbol = symbol_short!("MNTR");
+    const ADMIN_KEY: soroban_sdk::Symbol = symbol_short!("ADMIN");
+    const REWARD_MANAGER_KEY: soroban_sdk::Symbol = symbol_short!("RWDMGR");
 
     fn nft_key(nft_id: u64) -> (soroban_sdk::Symbol, u64) {
         (Self::NFT_KEY, nft_id)
@@ -36,6 +39,29 @@ impl Storage {
         env.storage().persistent().remove(&key);
     }
 
+    /// Key for authorized locker: (LOCK, contract_address)
+    fn locker_key(locker: &Address) -> (soroban_sdk::Symbol, Address) {
+        (symbol_short!("LOCK"), locker.clone())
+    }
+
+    /// Authorizes a contract address to lock/unlock NFTs.
+    pub fn add_locker(env: &Env, locker: &Address) {
+        let key = Self::locker_key(locker);
+        env.storage().persistent().set(&key, &true);
+    }
+
+    /// Removes authorization for a contract to lock/unlock NFTs.
+    pub fn remove_locker(env: &Env, locker: &Address) {
+        let key = Self::locker_key(locker);
+        env.storage().persistent().remove(&key);
+    }
+
+    /// Checks if a contract is authorized to lock/unlock NFTs.
+    pub fn is_locker(env: &Env, locker: &Address) -> bool {
+        let key = Self::locker_key(locker);
+        env.storage().persistent().get(&key).unwrap_or(false)
+    }
+
     fn minter_key(minter: &Address) -> (soroban_sdk::Symbol, Address) {
         (Self::MINTER_KEY, minter.clone())
     }
@@ -54,17 +80,30 @@ impl Storage {
         env.storage().instance().get(&Self::ADMIN_KEY)
     }
 
-    // --- Max supply ---
+    // --- RewardManager ---
 
-    /// Stores max supply. Passing None is a no-op (absence of the key means unlimited).
-    pub fn save_max_supply(env: &Env, max_supply: Option<u64>) {
-        if let Some(supply) = max_supply {
-            env.storage().instance().set(&Self::MAX_SUPPLY_KEY, &supply);
-        }
+    pub fn set_reward_manager(env: &Env, reward_manager: &Address) {
+        env.storage().instance().set(&Self::REWARD_MANAGER_KEY, reward_manager);
     }
 
+    pub fn get_reward_manager(env: &Env) -> Option<Address> {
+        env.storage().instance().get(&Self::REWARD_MANAGER_KEY)
+    }
+
+    // --- Max supply ---
+
+    /// Marks the contract initialized and stores the optional max supply cap.
+    pub fn set_max_supply(env: &Env, max_supply: Option<u64>) {
+        env.storage().persistent().set(&Self::MAX_SUPPLY_KEY, &max_supply);
+        env.storage().persistent().set(&Self::INITIALIZED_KEY, &true);
+    }
+
+    /// Returns the configured max supply cap, if one has been stored.
     pub fn get_max_supply(env: &Env) -> Option<u64> {
-        env.storage().instance().get(&Self::MAX_SUPPLY_KEY)
+        env.storage()
+            .persistent()
+            .get(&Self::MAX_SUPPLY_KEY)
+            .unwrap_or(None)
     }
 
     // --- Minter whitelist ---
@@ -116,28 +155,6 @@ impl Storage {
             .persistent()
             .get(&Self::NFT_COUNTER_KEY)
             .unwrap_or(0)
-    }
-
-    /// Marks the contract initialized and stores the optional max supply cap.
-    pub fn set_max_supply(env: &Env, max_supply: Option<u64>) {
-        env.storage().persistent().set(&Self::MAX_SUPPLY_KEY, &max_supply);
-        env.storage().persistent().set(&Self::INITIALIZED_KEY, &true);
-    }
-
-    /// Returns the configured max supply cap, if one has been stored.
-    pub fn get_max_supply(env: &Env) -> Option<u64> {
-        env.storage()
-            .persistent()
-            .get(&Self::MAX_SUPPLY_KEY)
-            .unwrap_or(None)
-    }
-
-    /// Returns whether the contract has been initialized.
-    pub fn is_initialized(env: &Env) -> bool {
-        env.storage()
-            .persistent()
-            .get(&Self::INITIALIZED_KEY)
-            .unwrap_or(false)
     }
 
     /// Adds an NFT ID to the owner's index.
