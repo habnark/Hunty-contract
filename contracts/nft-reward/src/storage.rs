@@ -8,6 +8,7 @@ impl Storage {
     const NFT_KEY: soroban_sdk::Symbol = symbol_short!("NFT");
     const NFT_COUNTER_KEY: soroban_sdk::Symbol = symbol_short!("CNTR");
     const OWNER_NFT_COUNT_KEY: soroban_sdk::Symbol = symbol_short!("ONFC");
+    const HUNT_NFT_COUNT_KEY: soroban_sdk::Symbol = symbol_short!("HNFC");
     const MAX_SUPPLY_KEY: soroban_sdk::Symbol = symbol_short!("MAXS");
     const INITIALIZED_KEY: soroban_sdk::Symbol = symbol_short!("INIT");
     const ADMIN_KEY: soroban_sdk::Symbol = symbol_short!("ADMIN");
@@ -247,6 +248,74 @@ impl Storage {
             env.storage()
                 .persistent()
                 .set(&Self::TOTAL_OWNERS_KEY, &(current_total + 1));
+        }
+    }
+
+    pub fn add_nft_to_hunt(env: &Env, hunt_id: u64, nft_id: u64) {
+        let count_key = Self::hunt_nft_count_key(hunt_id);
+        let count: u32 = env.storage().persistent().get(&count_key).unwrap_or(0);
+
+        let exist_key = Self::hunt_nft_exist_key(hunt_id, nft_id);
+        if env.storage().persistent().has(&exist_key) {
+            return;
+        }
+
+        env.storage()
+            .persistent()
+            .set(&Self::hunt_nft_entry_key(hunt_id, count), &nft_id);
+        env.storage().persistent().set(&count_key, &(count + 1));
+        env.storage().persistent().set(&exist_key, &());
+    }
+
+    pub fn get_hunt_nft_count(env: &Env, hunt_id: u64) -> u32 {
+        let count_key = Self::hunt_nft_count_key(hunt_id);
+        env.storage().persistent().get(&count_key).unwrap_or(0)
+    }
+
+    pub fn get_hunt_nfts(env: &Env, hunt_id: u64, offset: u32, limit: u32) -> Vec<u64> {
+        let count_key = Self::hunt_nft_count_key(hunt_id);
+        let count: u32 = env.storage().persistent().get(&count_key).unwrap_or(0);
+        if offset >= count {
+            return Vec::new(env);
+        }
+        let end = offset.saturating_add(limit).min(count);
+        let mut ids = Vec::new(env);
+        for i in offset..end {
+            let entry_key = Self::hunt_nft_entry_key(hunt_id, i);
+            if let Some(id) = env.storage().persistent().get(&entry_key) {
+                ids.push_back(id);
+            }
+        }
+        ids
+    }
+
+    pub fn remove_nft_from_hunt(env: &Env, hunt_id: u64, nft_id: u64) {
+        let count_key = Self::hunt_nft_count_key(hunt_id);
+        let count: u32 = env.storage().persistent().get(&count_key).unwrap_or(0);
+        let exist_key = Self::hunt_nft_exist_key(hunt_id, nft_id);
+        if !env.storage().persistent().has(&exist_key) {
+            return;
+        }
+
+        for i in 0..count {
+            let entry_key = Self::hunt_nft_entry_key(hunt_id, i);
+            if let Some(stored_id) = env.storage().persistent().get::<_, u64>(&entry_key) {
+                if stored_id == nft_id {
+                    let last_idx = count - 1;
+                    if i != last_idx {
+                        let last_key = Self::hunt_nft_entry_key(hunt_id, last_idx);
+                        if let Some(last_id) = env.storage().persistent().get::<_, u64>(&last_key) {
+                            env.storage().persistent().set(&entry_key, &last_id);
+                        }
+                        env.storage().persistent().remove(&last_key);
+                    } else {
+                        env.storage().persistent().remove(&entry_key);
+                    }
+                    env.storage().persistent().set(&count_key, &(count - 1));
+                    env.storage().persistent().remove(&exist_key);
+                    return;
+                }
+            }
         }
     }
 

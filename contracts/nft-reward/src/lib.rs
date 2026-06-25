@@ -610,6 +610,16 @@ impl NftReward {
         nfts.slice(offset..end)
     }
 
+    /// Returns paginated NFT IDs minted for a hunt.
+    pub fn get_nfts_by_hunt(env: Env, hunt_id: u64, offset: u32, limit: u32) -> Vec<u64> {
+        Storage::get_hunt_nfts(&env, hunt_id, offset, limit)
+    }
+
+    /// Returns the total number of NFTs minted for a hunt.
+    pub fn get_hunt_nft_count(env: Env, hunt_id: u64) -> u32 {
+        Storage::get_hunt_nft_count(&env, hunt_id)
+    }
+
     /// Burns (permanently destroys) an NFT, removing it from storage and the owner's list.
     ///
     /// # Authorization
@@ -628,7 +638,9 @@ impl NftReward {
             return Err(crate::errors::NftErrorCode::NotOwner);
         }
 
+        let hunt_id = nft.hunt_id;
         Storage::remove_nft(&env, nft_id);
+        Storage::remove_nft_from_hunt(&env, hunt_id, nft_id);
 
         let count_key = (symbol_short!("ONFC"), owner.clone());
         let count: u32 = env.storage().persistent().get(&count_key).unwrap_or(0);
@@ -1074,18 +1086,9 @@ impl NftReward {
         migration::NftRewardMigration::rollback_migration(&env, &admin)
     }
 
-    /// Searches NFTs by hunt_id.
+    /// Searches NFTs by hunt_id using the hunt collection index.
     pub fn search_by_hunt_id(env: Env, hunt_id: u64) -> Vec<u64> {
-        let all_nft_ids = Storage::get_all_nft_ids(&env);
-        let mut results = Vec::new(&env);
-        for nft_id in all_nft_ids.iter() {
-            if let Some(nft) = Storage::get_nft(&env, nft_id) {
-                if nft.hunt_id == hunt_id {
-                    results.push_back(nft_id);
-                }
-            }
-        }
-        results
+        Storage::get_hunt_nfts(&env, hunt_id, 0, u32::MAX)
     }
 
     /// Searches NFTs by rarity range (inclusive).
