@@ -12,6 +12,8 @@ use soroban_sdk::{
     contract, contractimpl, Address, Bytes, BytesN, Env, IntoVal, String, Symbol, Val, Vec,
 };
 
+const MAX_TITLE_BYTES: u32 = 200;
+const MAX_DESCRIPTION_BYTES: u32 = 2000;
 const MAX_QUESTION_LENGTH: u32 = 2000;
 const MAX_ANSWER_LENGTH: u32 = 256;
 const MAX_CLUES_PER_HUNT: u32 = 100;
@@ -61,21 +63,22 @@ impl HuntyCore {
         // but we ensure it's not a zero/null address pattern if needed
         // For now, we accept any valid Address type
 
-        // Validate title
-        let title_len = title.len();
-        if title_len == 0 {
-            return Err(HuntErrorCode::InvalidTitle);
-        }
-        const MAX_TITLE_LENGTH: u32 = 200;
-        if title_len > MAX_TITLE_LENGTH {
-            return Err(HuntErrorCode::InvalidTitle);
-        }
+        // Validate and sanitize title/description at byte level
+        let title = crate::sanitization::StringSanitizer::sanitize(
+            &env,
+            &title,
+            MAX_TITLE_BYTES,
+            false,
+        )
+        .map_err(|_| HuntErrorCode::InvalidTitle)?;
 
-        // Validate description
-        const MAX_DESCRIPTION_LENGTH: u32 = 2000;
-        if description.len() > MAX_DESCRIPTION_LENGTH {
-            return Err(HuntErrorCode::InvalidDescription);
-        }
+        let description = crate::sanitization::StringSanitizer::sanitize(
+            &env,
+            &description,
+            MAX_DESCRIPTION_BYTES,
+            true,
+        )
+        .map_err(|_| HuntErrorCode::InvalidDescription)?;
 
         let current_time = env.ledger().timestamp();
         rate_limit::RateLimiter::check_and_increment(&env, &creator, current_time)?;
@@ -164,10 +167,13 @@ impl HuntyCore {
                 limit: MAX_CLUES_PER_HUNT,
             }));
         }
-        let qlen = question.len();
-        if qlen == 0 || qlen > MAX_QUESTION_LENGTH {
-            return Err(HuntErrorCode::InvalidQuestion);
-        }
+        let question = crate::sanitization::StringSanitizer::sanitize(
+            &env,
+            &question,
+            MAX_QUESTION_LENGTH,
+            false,
+        )
+        .map_err(|_| HuntErrorCode::InvalidQuestion)?;
         let answer_hash =
             Self::normalize_and_hash_answer(&env, &answer).map_err(HuntErrorCode::from)?;
         let clue_id = Storage::next_clue_id(&env, hunt_id);
@@ -225,13 +231,14 @@ impl HuntyCore {
 
     /// Normalizes answer (trim, lowercase) and returns SHA256 hash as BytesN<32>.
     fn normalize_and_hash_answer(env: &Env, answer: &String) -> Result<BytesN<32>, HuntError> {
+        let answer = crate::sanitization::StringSanitizer::sanitize(
+            env,
+            answer,
+            MAX_ANSWER_LENGTH,
+            false,
+        )
+        .map_err(|_| HuntError::InvalidAnswer)?;
         let n = answer.len();
-        if n == 0 {
-            return Err(HuntError::InvalidAnswer);
-        }
-        if n > MAX_ANSWER_LENGTH {
-            return Err(HuntError::InvalidAnswer);
-        }
         let mut buf = [0u8; 256];
         answer.copy_into_slice(&mut buf[..n as usize]);
         let mut start = 0usize;

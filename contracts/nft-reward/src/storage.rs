@@ -37,6 +37,10 @@ impl Storage {
         (symbol_short!("ONFX"), owner.clone(), nft_id)
     }
 
+    fn operator_key(owner: &Address, operator: &Address) -> (soroban_sdk::Symbol, Address, Address) {
+        (symbol_short!("OPR"), owner.clone(), operator.clone())
+    }
+
     fn minter_key(minter: &Address) -> (soroban_sdk::Symbol, Address) {
         (Self::MINTER_KEY, minter.clone())
     }
@@ -53,19 +57,20 @@ impl Storage {
         env.storage().persistent().remove(&key);
     }
 
-    #[allow(dead_code)]
     pub fn save_admin(env: &Env, admin: &Address) {
         env.storage().instance().set(&Self::ADMIN_KEY, admin);
     }
 
-    #[allow(dead_code)]
     pub fn get_admin(env: &Env) -> Option<Address> {
         env.storage().instance().get(&Self::ADMIN_KEY)
     }
 
-    #[allow(dead_code)]
     pub fn set_reward_manager(env: &Env, address: &Address) {
         env.storage().instance().set(&Self::REWARD_MGR_KEY, address);
+    }
+
+    pub fn save_reward_manager(env: &Env, address: &Address) {
+        Self::set_reward_manager(env, address);
     }
 
     pub fn get_reward_manager(env: &Env) -> Option<Address> {

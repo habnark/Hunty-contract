@@ -176,6 +176,7 @@ pub struct OperatorChangedEvent {
 mod errors;
 pub use errors::NftErrorCode;
 mod migration;
+mod sanitization;
 mod storage;
 use storage::Storage;
 
@@ -337,6 +338,18 @@ impl NftReward {
         Self::mint_reward_nft_impl(env, hunt_id, player_address, meta, transferable)
     }
 
+    fn sanitize_metadata_field(
+        env: &Env,
+        value: &String,
+        max_bytes: u32,
+        allow_empty: bool,
+    ) -> String {
+        match sanitization::StringSanitizer::sanitize(env, value, max_bytes, allow_empty) {
+            Ok(s) => s,
+            Err(_) => panic_with_error!(env, crate::errors::NftErrorCode::InvalidMetadata),
+        }
+    }
+
     fn mint_reward_nft_impl(
         env: Env,
         hunt_id: u64,
@@ -347,6 +360,20 @@ impl NftReward {
         if metadata.rarity > 5 {
             panic_with_error!(&env, crate::errors::NftErrorCode::InvalidRarity);
         }
+
+        let mut metadata = metadata;
+        metadata.title =
+            Self::sanitize_metadata_field(&env, &metadata.title, MAX_NFT_TITLE_BYTES, false);
+        metadata.description = Self::sanitize_metadata_field(
+            &env,
+            &metadata.description,
+            MAX_NFT_DESCRIPTION_BYTES,
+            true,
+        );
+        metadata.image_uri =
+            Self::sanitize_metadata_field(&env, &metadata.image_uri, MAX_NFT_URI_BYTES, true);
+        metadata.hunt_title =
+            Self::sanitize_metadata_field(&env, &metadata.hunt_title, MAX_NFT_TITLE_BYTES, true);
 
         if let Some(max_supply) = Storage::get_max_supply(&env) {
             let current_supply = Storage::get_nft_counter(&env);
@@ -508,6 +535,15 @@ impl NftReward {
         if nft.owner != updater {
             return Err(crate::errors::NftErrorCode::NotOwner);
         }
+
+        let new_description = Self::sanitize_metadata_field(
+            &env,
+            &new_description,
+            MAX_NFT_DESCRIPTION_BYTES,
+            true,
+        );
+        let new_image_uri =
+            Self::sanitize_metadata_field(&env, &new_image_uri, MAX_NFT_URI_BYTES, true);
 
         nft.metadata.description = new_description;
         nft.metadata.image_uri = new_image_uri;
