@@ -31,6 +31,8 @@ pub enum HuntErrorCode {
     NoRequiredClues = 22,
     InvalidRarity = 23,
     InvalidTimeBonusConfig = 24,
+    /// Remote contract version is incompatible (major version mismatch).
+    IncompatibleVersion = 25,
 }
 
 #[derive(Debug)]
